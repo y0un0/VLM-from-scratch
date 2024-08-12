@@ -70,7 +70,85 @@ class VisionEmbedding(nn.Module):
         )
 
     def forward(self, pixel_values: torch.FloatTensor):
+        """
+        @param pixel_values: Image tensor of shape [batch_size, num_channels, height, width]
+        @return embeddings: Tensor of shape [batch_size, num_patches, embed_dim]
+        """
+        _, _, height, width = pixel_values.shape
+        # Convolve the patch_size kernel over the image to extract the embeddings for each patches. No overlapping (stride=patch_size)
+        # The output shape will be [batch_size, embed_dim, num_patches_H, num_patches_W]
+        # where num_patches_H = height // patch_size and num_patches_W = width // patch_size
+        patch_embeds = self.patch_embedding(pixel_values)
+        # num_patches_H = num_patches_W which means that [batch_size, embed_dim, num_patches_H, num_patches_W] -> [batch_size, embed_dim, num_patches]
+        # where num_patches = num_patches_H * num_patches_W
+        embeddings = patch_embeds.flatten(2)
+        # [batch_size, embed_dim, num_patches] -> [batch_size, num_patches, embed_dim] because the transformer takes a sequence of embeddings
+        embeddings = embeddings.transpose(1, 2)
+        # Add the position embeddings for each extracted patch. 
+        embeddings = embeddings + self.position_embedding(self.position_ids)
+        return embeddings
+    
+class VisionMLP(nn.Module):
+    def __init__(self, config: VisionConfig):
+        super().__init__()
+        self.embed_dim = config.hidden_size
+        self.fc1 = nn.Linear(self.embed_dim, config.intermediate_size)
+        self.fc2 = nn.Linear(config.intermediate_size, self.embed_dim)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """
+        @param hidden_states: Output of the self_attention layer of shape [batch_size, num_patches, embed_dim]
+        @return hidden_states: Output of the MLP layer of shape [batch_size, num_patches, embed_dim]
+        """
+        # [batch_size, num_patches, embed_dim] -> [batch_size, num_patches, intermediate_size]
+        hidden_states = self.fc1(hidden_states)
+        # new hidden_states shape: [batch_size, num_patches, intermediate_size]
+        hidden_states = nn.functional.gelu(hidden_states, approximate='tanh')
+        # [batch_size, num_patches, intermediate_size] -> [batch_size, num_patches, embed_dim]
+        hidden_states = self.fc2(hidden_states)
+        return hidden_states
+
+class VisionAttention(nn.Module):
+    def __init__(self, config: VisionConfig):
+        super().__init__()
         pass
+
+    
+class VisionEncoderLayer(nn.Module):
+    def __init__(self, config: VisionConfig):
+        super().__init__()
+        self.embed_dim = config.hidden_size
+        self.self_attn = VisionAttention(config)
+        self.layer_norm1 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
+        self.mlp = VisionMLP(config)
+        self.layer_norm2 = nn.LayerNorm(self.embed_dim, ps=config.layer_norm_eps)
+    
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """
+        Pass the flattened patches + position embeddings through the encoder layer:
+        (residual + layernorm + self_attn + residual + layernorm + mlp)
+        The encoder allows to extract contrexualized embeddings for each patches
+        @param hidden_states: Flattened patches + position embeddings Tensor of shape [batch_size, num_patches, embed_dim]
+        @return hidden_states: Contextualized embeddings for each patch Tensor of shape [batch_size, num_patches, embed_dim]
+        """
+        # residual shape: [batch_size, num_patches, embed_dim]
+        residual = hidden_states
+        # [batch_size, num_patches, embed_dim] -> [batch_size, num_patches, embed_dim]
+        hidden_states = self.layer_norm1(hidden_states)
+        # [batch_size, num_patches, embed_dim] -> [batch_size, num_patches, embed_dim]
+        hidden_states, _ = self.self_attn(hidden_states=hidden_states)
+        # [batch_size, num_patches, embed_dim]
+        hidden_states += residual
+        # residual shape: [batch_size, num_patches, embed_dim]
+        residual = hidden_states
+        # [batch_size, num_patches, embed_dim] -> [batch_size, num_patches, embed_dim]
+        hidden_states = self.layer_norm2(hidden_states)
+        # [batch_size, num_patches, embed_dim] -> [batch_size, num_patches, embed_dim]
+        hidden_states = self.mlp(hidden_states)
+        # [batch_size, num_patches, embed_dim]
+        hidden_states += residual
+        return hidden_states
+        
 
 class VisionTransformer(nn.Module):
     def __init__(self, config: VisionConfig):
