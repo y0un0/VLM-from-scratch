@@ -221,6 +221,7 @@ class VisionEncoderLayer(nn.Module):
 
 class VisionEncoder(nn.Module):
     def __init__(self, config: VisionConfig):
+        super().__init__()
         self.config = config
         self.layers = nn.ModuleList([VisionEncoderLayer(config) for _ in range(config.num_hidden_layers)])
     
