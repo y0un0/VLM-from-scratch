@@ -109,10 +109,79 @@ class VisionMLP(nn.Module):
         return hidden_states
 
 class VisionAttention(nn.Module):
+    """Multi-Head Self Attention for the Vision Transformer from 'Attention is all you need' paper"""
     def __init__(self, config: VisionConfig):
         super().__init__()
-        pass
+        self.config = config
+        self.embed_dim = config.hidden_size
+        self.num_heads = config.num_attention_heads
+        self.head_dim = self.embed_dim // self.num_heads
+        self.scale = self.head_dim ** -0.5 # Large values of the head_dim -> dot product is too large -> pushes softmax towards regions with very small gradients -> 1/sqrt(head_dim) to scale down the dot product
+        self.dropout = config.attention_dropout
 
+        self.k_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.v_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.q_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
+
+    def forward(self, hidden_states: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """
+        @param hidden_states: Output tensor of the first layernorm in the VisionEncoder of shape [batch_size, num_patches, embed_dim]
+        @return attn_output: The contextualized embeddings for each patches [batch_size, num_patches, embed_dim]
+        @return attn_weights: The weights of the multi-head attention [batch_size, num_heads, num_patches, num_patches]
+        """
+        batch_size, seq_len, _ = hidden_states.size()
+        # We run the hidden_states through Linear layer to get Wq, Wv, Wk
+        # query_states shape: [batch_size, num_patches, embed_dim]
+        query_states = self.q_proj(hidden_states)
+        # key_states shape: [batch_size, num_patches, embed_dim]
+        key_states = self.k_proj(hidden_states)
+        # value_states shape: [batch_size, num_patches, embed_dim]
+        value_states = self.v_proj(hidden_states)
+        # Splitting query_states, key_states and value_states into smaller parts: [batch_size, num_heads, num_patches, head_dim]
+        # The transpose allows to regroup each patch embeddings into multiple heads: [head1: [[emb_patch1], 
+        #                                                                                     [emb_patch2], 
+        #                                                                                     [emb_patch3]]
+        #                                                                             head2: [[emb_patch1], 
+        #                                                                                     [emb_patch2], 
+        #                                                                                     [emb_patch3]]
+        #                                                                             .....: [...]]
+        # Therefore, we can parallelize embeddings computation as each attention heads have embeddings from each patches
+        query_states = query_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        # Compute the attention -> Q * K^T / sqrt(d_k)
+        #                       -> [batch_size, num_heads, num_patches, head_dim] * [batch_size, num_heads, head_dim, num_patches] / sqrt(d_k)
+        #                       -> [batch_size, num_heads, num_patches, num_patches] / sqrt(d_k)
+        attn_weights = (torch.matmul(query_states, key_states.transpose(2, 3)) * self.scale)
+
+        if attn_weights.size() != (batch_size, self.num_heads, seq_len, seq_len):
+            raise ValueError(
+                f"Attention weights should be of size {(batch_size, self.num_heads, seq_len, seq_len)} but is"
+                f" {attn_weights.size()}"
+            )
+
+        # Apply softmax for each row of the attn_weights -> [batch_size, num_heads, num_patches, num_patches]
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        # Dropout
+        attn_weights = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+        # Multiplying the attn_weights with the value_states -> attn_output shape: [batch_size, num_heads, num_patches, head_dim]
+        # Results in the contextualized embeddings
+        attn_output = torch.matmul(attn_weights, value_states)
+
+        if attn_output.size() != (batch_size, self.num_heads, seq_len, self.head_dim):
+            raise ValueError(
+                f"`attn_output` should be of size {(batch_size, self.num_heads, seq_len, self.head_dim)}, but is"
+                f" {attn_output.size()}"
+            )
+        # [batch_size, num_heads, num_patches, head_dim] -> [batch_size, num_patches, num_heads, head_dim]
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        # [batch_size, num_patches, num_heads, head_dim] -> [batch_size, num_patches, embde_dim]
+        attn_output = attn_output.reshape(batch_size, seq_len, self.embed_dim)
+        # Mixing the results by multiplying by out_proj: [batch_size, num_patches, embed_dim]
+        attn_output = self.out_proj(attn_output)
+        return attn_output, attn_weights
     
 class VisionEncoderLayer(nn.Module):
     def __init__(self, config: VisionConfig):
