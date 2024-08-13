@@ -217,7 +217,22 @@ class VisionEncoderLayer(nn.Module):
         # [batch_size, num_patches, embed_dim]
         hidden_states += residual
         return hidden_states
+
+
+class VisionEncoder(nn.Module):
+    def __init__(self, config: VisionConfig):
+        self.config = config
+        self.layers = nn.ModuleList([VisionEncoderLayer(config) for _ in range(config.num_hidden_layers)])
+    
+    def forward(self, inputs_embeds: torch.Tensor) -> torch.Tensor:
+        # input_embeds shape: [batch_size, num_patches, embed_dim]
+        hidden_states = inputs_embeds
+
+        for encoder_layer in self.layers:
+            # [batch_size, num_patches, embed_dim] -> [batch_size, num_patches, embed_dim]
+            hidden_states = encoder_layer(hidden_states)
         
+        return hidden_states
 
 class VisionTransformer(nn.Module):
     def __init__(self, config: VisionConfig):
