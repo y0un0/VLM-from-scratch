@@ -190,7 +190,7 @@ class VisionEncoderLayer(nn.Module):
         self.self_attn = VisionAttention(config)
         self.layer_norm1 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
         self.mlp = VisionMLP(config)
-        self.layer_norm2 = nn.LayerNorm(self.embed_dim, ps=config.layer_norm_eps)
+        self.layer_norm2 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
     
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """
@@ -271,3 +271,9 @@ class VisionModel(nn.Module):
         """
         return self.vision_model(pixel_values=pixel_values)
     
+if __name__ == "__main__":
+    config = VisionConfig()
+    model = VisionModel(config)
+    pixel_values = torch.randn(1, 3, 224, 224)
+    output = model(pixel_values)
+    print(output.shape)
