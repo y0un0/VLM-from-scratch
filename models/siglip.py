@@ -2,7 +2,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
-class VisionConfig:
+class SigLIPConfig:
     def __init__(
         self, 
         hidden_size=768, 
@@ -42,8 +42,8 @@ class VisionConfig:
         self.attention_dropout = attention_dropout
         self.num_image_tokens = num_image_tokens
 
-class VisionEmbedding(nn.Module):
-    def __init__(self, config: VisionConfig):
+class SigLIPEmbedding(nn.Module):
+    def __init__(self, config: SigLIPConfig):
         super().__init__()
         self.config = config
         self.embed_dim = config.hidden_size
@@ -88,8 +88,8 @@ class VisionEmbedding(nn.Module):
         embeddings = embeddings + self.position_embedding(self.position_ids)
         return embeddings
     
-class VisionMLP(nn.Module):
-    def __init__(self, config: VisionConfig):
+class SigLIPMLP(nn.Module):
+    def __init__(self, config: SigLIPConfig):
         super().__init__()
         self.embed_dim = config.hidden_size
         self.fc1 = nn.Linear(self.embed_dim, config.intermediate_size)
@@ -108,9 +108,9 @@ class VisionMLP(nn.Module):
         hidden_states = self.fc2(hidden_states)
         return hidden_states
 
-class VisionAttention(nn.Module):
+class SigLIPAttention(nn.Module):
     """Multi-Head Self Attention for the Vision Transformer from 'Attention is all you need' paper"""
-    def __init__(self, config: VisionConfig):
+    def __init__(self, config: SigLIPConfig):
         super().__init__()
         self.config = config
         self.embed_dim = config.hidden_size
@@ -183,13 +183,13 @@ class VisionAttention(nn.Module):
         attn_output = self.out_proj(attn_output)
         return attn_output, attn_weights
     
-class VisionEncoderLayer(nn.Module):
-    def __init__(self, config: VisionConfig):
+class SigLIPEncoderLayer(nn.Module):
+    def __init__(self, config: SigLIPConfig):
         super().__init__()
         self.embed_dim = config.hidden_size
-        self.self_attn = VisionAttention(config)
+        self.self_attn = SigLIPAttention(config)
         self.layer_norm1 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
-        self.mlp = VisionMLP(config)
+        self.mlp = SigLIPMLP(config)
         self.layer_norm2 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
     
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -219,11 +219,11 @@ class VisionEncoderLayer(nn.Module):
         return hidden_states
 
 
-class VisionEncoder(nn.Module):
-    def __init__(self, config: VisionConfig):
+class SigLIPEncoder(nn.Module):
+    def __init__(self, config: SigLIPConfig):
         super().__init__()
         self.config = config
-        self.layers = nn.ModuleList([VisionEncoderLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([SigLIPEncoderLayer(config) for _ in range(config.num_hidden_layers)])
     
     def forward(self, inputs_embeds: torch.Tensor) -> torch.Tensor:
         # input_embeds shape: [batch_size, num_patches, embed_dim]
@@ -235,14 +235,14 @@ class VisionEncoder(nn.Module):
         
         return hidden_states
 
-class VisionTransformer(nn.Module):
-    def __init__(self, config: VisionConfig):
+class SigLIPTransformer(nn.Module):
+    def __init__(self, config: SigLIPConfig):
         super().__init__()
         self.config = config
         embed_dim = config.hidden_size
 
-        self.embeddings = VisionEmbedding(config)
-        self.encoder = VisionEncoder(config)
+        self.embeddings = SigLIPEmbedding(config)
+        self.encoder = SigLIPEncoder(config)
         self.post_layernorm = nn.LayerNorm(embed_dim, eps=config.layer_norm_eps)
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
@@ -258,11 +258,11 @@ class VisionTransformer(nn.Module):
         return last_hidden_state
 
 
-class VisionModel(nn.Module):
-    def __init__(self, config: VisionConfig):
+class SigLIPModel(nn.Module):
+    def __init__(self, config: SigLIPConfig):
         super().__init__()
         self.config = config
-        self.vision_model = VisionTransformer(config)
+        self.vision_model = SigLIPTransformer(config)
 
     def forward(self, pixel_values) -> Tuple:
         """
@@ -272,8 +272,8 @@ class VisionModel(nn.Module):
         return self.vision_model(pixel_values=pixel_values)
     
 if __name__ == "__main__":
-    config = VisionConfig()
-    model = VisionModel(config)
+    config = SigLIPConfig()
+    model = SigLIPModel(config)
     pixel_values = torch.randn(1, 3, 224, 224)
     output = model(pixel_values)
     print(output.shape)
