@@ -6,6 +6,17 @@ from PIL import Image
 IMAGENET_STANDARD_MEAN = [0.5, 0.5, 0.5]
 IMAGENET_STANDARD_STD = [0.5, 0.5, 0.5]
 
+def add_image_tokens_to_prompts(prefix_prompt, bos_token, image_seq_len, image_token):
+    """
+    Quoting from the huggingface blog (https://huggingface.co/blog/paligemma#detailed-inference-process):
+        The input text is tokenized normally.
+        A <bos> token is added at the beginning, and an additional newline token (\n) is appended.
+        This newline token is an essential part of the input prompt the model was trained with, so adding it explicitly ensures it's always there.
+        The tokenized text is also prefixed with a fixed number of <image> tokens.
+        NOTE: In the paper it should be tokenized separately but huggingface process it directly (put the github link)
+    """
+    return f"{image_token * image_seq_len}{bos_token}{prefix_prompt}\n"
+
 def resize(image: Image.Image, size: Tuple[int, int], resample: Image.Resampling = None, reducing_gap: Optional[int] = None) -> Image.Image:
     height, width = size
     return image.resize((width, height), resample=resample, reducing_gap=reducing_gap)
@@ -75,6 +86,7 @@ class PaliGemmaProcesssor:
         self.tokenizer = tokenizer
 
     def __call__(self, text: List[str], images: List[Image.Image], padding: str = "longest", truncation: bool = True) -> dict:
+        """ Preparing the inputs for PaliGemma """
         # For now, we will only consider one image and one text
         assert len(images) == 1 and len(text) == 1, f"Received {len(images)} images for {len(text)} prompts."
         
@@ -86,3 +98,26 @@ class PaliGemmaProcesssor:
         # Convert the pixel_values shape to [batch_size, channels, height, width]
         pixel_values = np.stack(pixel_values, axis=0)
         pixel_values = torch.tensor(pixel_values)
+
+        # Prepare the complete tokens (image + text) by including the image tokens to the prompt
+        input_strings = [
+            add_image_tokens_to_prompts(
+                prefix_prompt=prompt,
+                bos_token=self.tokenizer.bos_token,
+                image_seq_len=self.image_seq_len,
+                image_token=self.IMAGE_TOKEN
+            )
+            for prompt in text
+        ]
+
+        # Return the input_ids (list of int that represent the token position) and attention_mask as tensor
+        inputs = self.tokenizer(
+            input_strings,
+            return_tensors="pt",
+            padding=padding,
+            truncation=truncation,
+        )
+
+        return_data = {"pixel_values": pixel_values, **inputs}
+
+        return return_data
